@@ -1,20 +1,30 @@
-import sqlite3
 import sys
+import psycopg2
 
 from hardware import wave_hand, go_home, pick_object, dance
 
-DB_PATH = "robot.db"
+
+def get_db_connection():
+    return psycopg2.connect(
+        dbname="robot",
+        user="robot_user",
+        password="arrianaf",   # change if you set a different password
+        host="localhost",
+        port="5432"
+    )
 
 
 def get_hardware_action(user_input: str):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cur = conn.cursor()
 
     cur.execute(
-        "SELECT hardware_action FROM commands WHERE user_input = ?",
+        "SELECT hardware_action FROM commands WHERE user_input = %s",
         (user_input,)
     )
     row = cur.fetchone()
+
+    cur.close()
     conn.close()
 
     if row:
