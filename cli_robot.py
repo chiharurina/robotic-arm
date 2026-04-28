@@ -1,7 +1,9 @@
 import sys
 import json
 import re
+import subprocess
 from datetime import datetime
+
 import psycopg2
 
 from hardware import move_joint, move_joints, hand_open, hand_close, sleep_seconds
@@ -15,7 +17,6 @@ DB_CONFIG = {
     "port": "5432",
 }
 
-# Conservative safety limits
 JOINT_LIMITS = {
     1: (0, 180),
     2: (60, 120),
@@ -29,6 +30,13 @@ MIN_SPEED = 100
 MAX_SPEED = 2500
 MAX_SLEEP = 5.0
 
+ROS_ACTION_SERVICES = {
+    "go_home": "/go_home",
+    "wave_hand": "/wave_hand",
+    "dance": "/dance",
+    "pick_up_object": "/pick_up_object",
+}
+
 
 def get_db_connection():
     return psycopg2.connect(**DB_CONFIG)
@@ -37,124 +45,65 @@ def get_db_connection():
 def normalize_command(user_text: str) -> str:
     text = user_text.strip().lower()
 
-    # home / reset
     home_phrases = [
-        "home",
-        "go home",
-        "go to home",
-        "go to home position",
-        "return home",
-        "return to home",
-        "reset",
-        "reset position",
+        "home", "go home", "go to home", "go to home position",
+        "return home", "return to home", "reset", "reset position",
         "go back home",
     ]
 
-    # rest
     rest_phrases = [
-        "rest",
-        "rest position",
-        "go to rest",
-        "return to rest",
-        "idle",
-        "idle position",
-        "park",
-        "park arm",
+        "rest", "rest position", "go to rest", "return to rest",
+        "idle", "idle position", "park", "park arm",
     ]
 
-    # hello / wave
     hello_phrases = [
-        "hello",
-        "wave",
-        "wave hand",
-        "say hello",
-        "do hello",
-        "greet",
+        "hello", "wave", "wave hand", "say hello", "do hello", "greet",
     ]
 
-    # dance
     dance_phrases = [
-        "dance",
-        "do a dance",
-        "start dancing",
-        "dance now",
+        "dance", "do a dance", "start dancing", "dance now",
     ]
 
-    # pickup
     pickup_phrases = [
-        "pickup",
-        "pick up",
-        "pick",
-        "pick up object",
-        "pick up the object",
-        "grab object",
-        "grab the object",
-        "grab tool",
-        "grab the tool",
+        "pickup", "pick up", "pick", "pick up object", "pick up the object",
+        "grab object", "grab the object", "grab tool", "grab the tool",
         "pick up the tool",
     ]
 
-    # open hand / gripper
     open_hand_phrases = [
-        "open hand",
-        "open the hand",
-        "open gripper",
-        "open the gripper",
-        "release",
-        "release object",
+        "open hand", "open the hand", "open gripper", "open the gripper",
+        "release", "release object",
     ]
 
-    # close hand / gripper
     close_hand_phrases = [
-        "close hand",
-        "close the hand",
-        "close gripper",
-        "close the gripper",
-        "grip",
-        "grab",
+        "close hand", "close the hand", "close gripper", "close the gripper",
+        "grip", "grab",
     ]
 
-    # point left
     point_left_phrases = [
-        "point left",
-        "look left",
-        "turn left",
-        "move left",
-        "aim left",
+        "point left", "look left", "turn left", "move left", "aim left",
     ]
-    # point right
+
     point_right_phrases = [
-        "point right",
-        "look right",
-        "turn right",
-        "move right",
-        "aim right",
+        "point right", "look right", "turn right", "move right", "aim right",
     ]
 
     if text in home_phrases:
         return "go_home"
-
     if text in rest_phrases:
         return "rest_position"
-
     if text in hello_phrases:
         return "wave_hand"
-
     if text in dance_phrases:
         return "dance"
-
     if text in pickup_phrases:
         return "pick_up_object"
-
     if text in open_hand_phrases:
         return "open_hand"
-
     if text in close_hand_phrases:
         return "close_hand"
-
     if text in point_left_phrases:
         return "point_left"
-
     if text in point_right_phrases:
         return "point_right"
 
@@ -163,13 +112,10 @@ def normalize_command(user_text: str) -> str:
 
 def split_commands(user_text: str) -> list[str]:
     text = user_text.strip().lower()
-
-    # normalize common connectors first
     text = text.replace(" and then ", " then ")
     text = text.replace(" then ", "|")
     text = text.replace(" and ", "|")
     text = text.replace(",", "|")
-
     parts = [p.strip() for p in text.split("|") if p.strip()]
     return [normalize_command(p) for p in parts]
 
@@ -177,7 +123,6 @@ def split_commands(user_text: str) -> list[str]:
 def get_action_steps(action_name: str):
     conn = get_db_connection()
     cur = conn.cursor()
-
     cur.execute(
         """
         SELECT a.name, av.version_no, av.steps
@@ -190,7 +135,6 @@ def get_action_steps(action_name: str):
         (action_name,)
     )
     row = cur.fetchone()
-
     cur.close()
     conn.close()
 
@@ -218,9 +162,7 @@ def validate_angle(joint: int, angle: int | float):
     if not isinstance(angle, (int, float)):
         raise ValueError(f"Invalid angle type for joint {joint}: {angle}")
     if not (low <= float(angle) <= high):
-        raise ValueError(
-            f"Unsafe angle for joint {joint}: {angle} (allowed {low}-{high})"
-        )
+        raise ValueError(f"Unsafe angle for joint {joint}: {angle} (allowed {low}-{high})")
 
 
 def validate_sleep(seconds: float):
@@ -238,7 +180,6 @@ def validate_steps(steps):
         for i, step in enumerate(steps, start=1):
             if not isinstance(step, dict):
                 return False, f"Step {i}: must be an object"
-
             if "type" not in step:
                 return False, f"Step {i}: missing 'type'"
 
@@ -247,11 +188,9 @@ def validate_steps(steps):
             if step_type == "move_joints":
                 if "joints" not in step or "speed" not in step:
                     return False, f"Step {i}: move_joints requires 'joints' and 'speed'"
-
                 joints = step["joints"]
                 if not isinstance(joints, list) or len(joints) != 6:
                     return False, f"Step {i}: move_joints must have exactly 6 joint values"
-
                 validate_speed(step["speed"])
                 for joint_id, angle in enumerate(joints, start=1):
                     validate_angle(joint_id, angle)
@@ -259,7 +198,6 @@ def validate_steps(steps):
             elif step_type == "move_joint":
                 if "joint" not in step or "angle" not in step or "speed" not in step:
                     return False, f"Step {i}: move_joint requires 'joint', 'angle', and 'speed'"
-
                 validate_speed(step["speed"])
                 validate_angle(int(step["joint"]), step["angle"])
 
@@ -285,7 +223,7 @@ def validate_steps(steps):
         return False, str(exc)
 
 
-def execute_steps(steps):
+def execute_steps_locally(steps):
     for i, step in enumerate(steps, start=1):
         step_type = step["type"]
 
@@ -312,10 +250,47 @@ def execute_steps(steps):
             sleep_seconds(step["seconds"])
 
 
+def call_ros_service(service_name: str) -> tuple[bool, str]:
+    cmd = [
+        "docker", "exec", "-i", "ros2_dofbot",
+        "bash", "-lc",
+        (
+            "source /opt/ros/jazzy/setup.bash && "
+            "source /root/ros2_dofbot_ws/install/setup.bash && "
+            f"ros2 service call {service_name} std_srvs/srv/Trigger"
+        ),
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except Exception as exc:
+        return False, f"ROS call failed to start: {exc}"
+
+    output = (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
+
+    if result.returncode != 0:
+        return False, output.strip()
+
+    if "success=True" in output or "success: true" in output.lower():
+        return True, output.strip()
+
+    return False, output.strip()
+
+
+def execute_action(action_name: str, steps):
+    if action_name in ROS_ACTION_SERVICES:
+        service_name = ROS_ACTION_SERVICES[action_name]
+        print(f"Executing via ROS service: {service_name}")
+        return call_ros_service(service_name)
+
+    print(f"Executing locally: {action_name}")
+    execute_steps_locally(steps)
+    return True, "Executed locally"
+
+
 def log_execution(requested_text, action_name, status, error_message, telemetry, started_at, finished_at):
     conn = get_db_connection()
     cur = conn.cursor()
-
     cur.execute(
         """
         INSERT INTO execution_logs (
@@ -333,7 +308,6 @@ def log_execution(requested_text, action_name, status, error_message, telemetry,
             finished_at,
         )
     )
-
     conn.commit()
     cur.close()
     conn.close()
@@ -375,15 +349,28 @@ def run_single_action(requested_text: str, action_name: str):
     try:
         print(f"\nExecuting action: {action_data['action_name']}")
         print(f"Version: {action_data['version_no']}")
-        execute_steps(steps)
-        print("Execution complete.")
+        success, execution_message = execute_action(action_name, steps)
 
+        if not success:
+            print(f"Execution failed for {action_name}: {execution_message}")
+            log_execution(
+                requested_text=requested_text,
+                action_name=action_name,
+                status="failed",
+                error_message=execution_message,
+                telemetry={"message": "execution failed"},
+                started_at=started_at,
+                finished_at=datetime.now(),
+            )
+            return False
+
+        print("Execution complete.")
         log_execution(
             requested_text=requested_text,
             action_name=action_name,
             status="success",
             error_message=None,
-            telemetry={"message": "execution completed"},
+            telemetry={"message": execution_message},
             started_at=started_at,
             finished_at=datetime.now(),
         )
