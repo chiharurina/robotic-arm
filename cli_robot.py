@@ -1,6 +1,5 @@
 import sys
 import json
-import re
 import subprocess
 from datetime import datetime
 
@@ -35,6 +34,20 @@ ROS_ACTION_SERVICES = {
     "wave_hand": "/wave_hand",
     "dance": "/dance",
     "pick_up_object": "/pick_up_object",
+    "point_left": "/point_left",
+    "point_right": "/point_right",
+}
+
+ALLOWED_ACTIONS = {
+    "go_home",
+    "wave_hand",
+    "dance",
+    "pick_up_object",
+    "point_left",
+    "point_right",
+    "open_hand",
+    "close_hand",
+    "rest_position",
 }
 
 
@@ -45,48 +58,91 @@ def get_db_connection():
 def normalize_command(user_text: str) -> str:
     text = user_text.strip().lower()
 
-    home_phrases = [
-        "home", "go home", "go to home", "go to home position",
-        "return home", "return to home", "reset", "reset position",
+    home_phrases = {
+        "home",
+        "go home",
+        "go to home",
+        "go to home position",
+        "return home",
+        "return to home",
+        "reset",
+        "reset position",
         "go back home",
-    ]
+    }
 
-    rest_phrases = [
-        "rest", "rest position", "go to rest", "return to rest",
-        "idle", "idle position", "park", "park arm",
-    ]
+    rest_phrases = {
+        "rest",
+        "rest position",
+        "go to rest",
+        "return to rest",
+        "idle",
+        "idle position",
+        "park",
+        "park arm",
+    }
 
-    hello_phrases = [
-        "hello", "wave", "wave hand", "say hello", "do hello", "greet",
-    ]
+    hello_phrases = {
+        "hello",
+        "wave",
+        "wave hand",
+        "say hello",
+        "do hello",
+        "greet",
+    }
 
-    dance_phrases = [
-        "dance", "do a dance", "start dancing", "dance now",
-    ]
+    dance_phrases = {
+        "dance",
+        "do a dance",
+        "start dancing",
+        "dance now",
+    }
 
-    pickup_phrases = [
-        "pickup", "pick up", "pick", "pick up object", "pick up the object",
-        "grab object", "grab the object", "grab tool", "grab the tool",
+    pickup_phrases = {
+        "pickup",
+        "pick up",
+        "pick",
+        "pick up object",
+        "pick up the object",
+        "grab object",
+        "grab the object",
+        "grab tool",
+        "grab the tool",
         "pick up the tool",
-    ]
+    }
 
-    open_hand_phrases = [
-        "open hand", "open the hand", "open gripper", "open the gripper",
-        "release", "release object",
-    ]
+    open_hand_phrases = {
+        "open hand",
+        "open the hand",
+        "open gripper",
+        "open the gripper",
+        "release",
+        "release object",
+    }
 
-    close_hand_phrases = [
-        "close hand", "close the hand", "close gripper", "close the gripper",
-        "grip", "grab",
-    ]
+    close_hand_phrases = {
+        "close hand",
+        "close the hand",
+        "close gripper",
+        "close the gripper",
+        "grip",
+        "grab",
+    }
 
-    point_left_phrases = [
-        "point left", "look left", "turn left", "move left", "aim left",
-    ]
+    point_left_phrases = {
+        "point left",
+        "look left",
+        "turn left",
+        "move left",
+        "aim left",
+    }
 
-    point_right_phrases = [
-        "point right", "look right", "turn right", "move right", "aim right",
-    ]
+    point_right_phrases = {
+        "point right",
+        "look right",
+        "turn right",
+        "move right",
+        "aim right",
+    }
 
     if text in home_phrases:
         return "go_home"
@@ -116,13 +172,148 @@ def split_commands(user_text: str) -> list[str]:
     text = text.replace(" then ", "|")
     text = text.replace(" and ", "|")
     text = text.replace(",", "|")
+
     parts = [p.strip() for p in text.split("|") if p.strip()]
     return [normalize_command(p) for p in parts]
+
+
+def interpret_with_llm_placeholder(user_text: str) -> list[str]:
+    
+    """
+    Placeholder LLM interpreter.
+    Converts natural language into a list of approved action names.
+    Returns an empty list if nothing clear is found.
+    """
+    text = user_text.strip().lower()
+    actions = []
+
+    if ("pick" in text or "grab" in text) and ("home" in text or "return" in text):
+        actions = ["pick_up_object", "go_home"]
+
+    elif ("wave" in text or "hello" in text or "greet" in text) and ("left" in text):
+        actions = ["wave_hand", "point_left"]
+
+    elif ("wave" in text or "hello" in text or "greet" in text) and ("right" in text):
+        actions = ["wave_hand", "point_right"]
+
+    elif ("dance" in text) and ("home" in text or "return" in text):
+        actions = ["dance", "go_home"]
+
+    elif ("point" in text or "look" in text or "turn" in text) and "left" in text:
+        actions = ["point_left"]
+
+    elif ("point" in text or "look" in text or "turn" in text) and "right" in text:
+        actions = ["point_right"]
+
+    elif ("open" in text and ("gripper" in text or "hand" in text)) or "release" in text:
+        actions = ["open_hand"]
+
+    elif ("close" in text and ("gripper" in text or "hand" in text)) or "grip" in text:
+        actions = ["close_hand"]
+
+    elif "rest" in text or "idle" in text or "park" in text:
+        actions = ["rest_position"]
+
+    elif "dance" in text:
+        actions = ["dance"]
+
+    elif "wave" in text or "hello" in text or "greet" in text:
+        actions = ["wave_hand"]
+
+    elif "pick" in text or "grab" in text:
+        actions = ["pick_up_object"]
+
+    elif "home" in text or "reset" in text:
+        actions = ["go_home"]
+
+    actions = [a for a in actions if a in ALLOWED_ACTIONS]
+    return actions
+
+def interpret_with_local_llm(user_text: str) -> list[str]:
+    """
+    Uses local Ollama to convert natural language into approved action names.
+    Returns [] on any failure.
+    """
+    prompt = f"""
+You are a robot action parser.
+
+Allowed actions:
+go_home
+wave_hand
+dance
+pick_up_object
+point_left
+point_right
+open_hand
+close_hand
+rest_position
+
+Rules:
+- Return JSON only.
+- Use only allowed actions.
+- Return this exact schema: {{"actions":["go_home"]}}
+- If unclear return: {{"actions":[]}}
+- Do not explain.
+- Do not invent new actions.
+
+User input: {user_text}
+"""
+
+    payload = {
+        "model": "phi",
+        "prompt": prompt,
+        "stream": False,
+        "format": "json",
+    }
+
+    try:
+        result = subprocess.run(
+            [
+                "curl",
+                "-s",
+                "http://localhost:11434/api/generate",
+                "-d",
+                json.dumps(payload),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except Exception as exc:
+        print(f"Local LLM call failed to start: {exc}")
+        return []
+
+    if result.returncode != 0 or not result.stdout.strip():
+        return []
+
+    try:
+        outer = json.loads(result.stdout)
+        raw_response = outer.get("response", "").strip()
+        if not raw_response:
+            return []
+
+        data = json.loads(raw_response)
+        actions = data.get("actions", [])
+
+        if not isinstance(actions, list):
+            return []
+
+        cleaned_actions = []
+        for action in actions:
+            if isinstance(action, str) and action in ALLOWED_ACTIONS:
+                cleaned_actions.append(action)
+
+        return cleaned_actions
+
+    except Exception as exc:
+        print(f"Local LLM parse failed: {exc}")
+        return []
 
 
 def get_action_steps(action_name: str):
     conn = get_db_connection()
     cur = conn.cursor()
+
     cur.execute(
         """
         SELECT a.name, av.version_no, av.steps
@@ -135,6 +326,7 @@ def get_action_steps(action_name: str):
         (action_name,)
     )
     row = cur.fetchone()
+
     cur.close()
     conn.close()
 
@@ -162,7 +354,9 @@ def validate_angle(joint: int, angle: int | float):
     if not isinstance(angle, (int, float)):
         raise ValueError(f"Invalid angle type for joint {joint}: {angle}")
     if not (low <= float(angle) <= high):
-        raise ValueError(f"Unsafe angle for joint {joint}: {angle} (allowed {low}-{high})")
+        raise ValueError(
+            f"Unsafe angle for joint {joint}: {angle} (allowed {low}-{high})"
+        )
 
 
 def validate_sleep(seconds: float):
@@ -180,6 +374,7 @@ def validate_steps(steps):
         for i, step in enumerate(steps, start=1):
             if not isinstance(step, dict):
                 return False, f"Step {i}: must be an object"
+
             if "type" not in step:
                 return False, f"Step {i}: missing 'type'"
 
@@ -188,9 +383,11 @@ def validate_steps(steps):
             if step_type == "move_joints":
                 if "joints" not in step or "speed" not in step:
                     return False, f"Step {i}: move_joints requires 'joints' and 'speed'"
+
                 joints = step["joints"]
                 if not isinstance(joints, list) or len(joints) != 6:
                     return False, f"Step {i}: move_joints must have exactly 6 joint values"
+
                 validate_speed(step["speed"])
                 for joint_id, angle in enumerate(joints, start=1):
                     validate_angle(joint_id, angle)
@@ -198,6 +395,7 @@ def validate_steps(steps):
             elif step_type == "move_joint":
                 if "joint" not in step or "angle" not in step or "speed" not in step:
                     return False, f"Step {i}: move_joint requires 'joint', 'angle', and 'speed'"
+
                 validate_speed(step["speed"])
                 validate_angle(int(step["joint"]), step["angle"])
 
@@ -262,16 +460,31 @@ def call_ros_service(service_name: str) -> tuple[bool, str]:
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
     except Exception as exc:
         return False, f"ROS call failed to start: {exc}"
 
     output = (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
+    output_lower = output.lower()
+
+    print("ROS RAW OUTPUT:")
+    print(output)
 
     if result.returncode != 0:
         return False, output.strip()
 
-    if "success=True" in output or "success: true" in output.lower():
+    success_markers = [
+        "success: true",
+        "success=true",
+        "trigger_response(success=true",
+    ]
+
+    if any(marker in output_lower for marker in success_markers):
         return True, output.strip()
 
     return False, output.strip()
@@ -288,9 +501,18 @@ def execute_action(action_name: str, steps):
     return True, "Executed locally"
 
 
-def log_execution(requested_text, action_name, status, error_message, telemetry, started_at, finished_at):
+def log_execution(
+    requested_text,
+    action_name,
+    status,
+    error_message,
+    telemetry,
+    started_at,
+    finished_at
+):
     conn = get_db_connection()
     cur = conn.cursor()
+
     cur.execute(
         """
         INSERT INTO execution_logs (
@@ -308,6 +530,7 @@ def log_execution(requested_text, action_name, status, error_message, telemetry,
             finished_at,
         )
     )
+
     conn.commit()
     cur.close()
     conn.close()
@@ -349,6 +572,7 @@ def run_single_action(requested_text: str, action_name: str):
     try:
         print(f"\nExecuting action: {action_data['action_name']}")
         print(f"Version: {action_data['version_no']}")
+
         success, execution_message = execute_action(action_name, steps)
 
         if not success:
@@ -399,8 +623,17 @@ def main():
         return
 
     requested_text = sys.argv[1].strip().lower()
-    commands = split_commands(requested_text)
-    print("Parsed commands:", commands)
+
+    commands = interpret_with_local_llm(requested_text)
+    if commands:
+        print("Local LLM commands:", commands)
+    else:
+        commands = interpret_with_llm_placeholder(requested_text)
+        if commands:
+            print("LLM placeholder commands:", commands)
+        else:
+            commands = split_commands(requested_text)
+            print("Parsed commands:", commands)
 
     if not commands:
         print("No commands found.")
